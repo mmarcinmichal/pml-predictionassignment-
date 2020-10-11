@@ -1,1 +1,2 @@
-# pml-predictionassignment-
+# Project description
+Peer-graded Assignment: Prediction Assignment Writeup see more details in https://www.coursera.org/learn/practical-machine-learning/peer/R43St/prediction-assignment-writeup/submit.

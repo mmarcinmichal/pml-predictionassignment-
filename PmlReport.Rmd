@@ -1,0 +1,142 @@
+---
+title: "Prediction Assignment - Exercise prediction"
+author: "Marcin Mirończuk"
+output: html_document
+self_contained: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Intorduction
+The goal of the project is to predict how people did exercise (the "classe" variable in the training set). The report describes (1) how the prediction model is built, (2) how cross-validation is used, (3) what the expected out of sample error is, and (4) why is made some decision. Also, the created prediction model is used to predict 20 different test cases.
+
+# Analysis
+Pre-processing is making, for example, clearing workspace and loading required libraries.
+
+```{r preproc, echo=T}
+#
+# Clear workspace
+#
+rm(list = ls())
+
+#
+# Set language to En
+#
+Sys.setlocale(category = "LC_ALL", locale = "english")
+
+#
+# Libraries loading
+#
+libraries <- c("stringr", "parallel", "caret", "foreach")
+
+if (length(setdiff(libraries, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(libraries, rownames(installed.packages())), dependencies = T)  
+}
+
+loadedLibraries <- (.packages())
+unloadedLibraries <- setdiff(libraries, loadedLibraries)
+if (length(unloadedLibraries) != 0) {
+  sapply(unloadedLibraries, function(x)
+    library(x, character.only = TRUE))
+}
+```
+
+Downloading and loading training and testing data. There are a few assumptions:
+
+- we keep only numerical variables, i.e. all character variables are removed,
+- the time series data and id data are removed.
+
+```{r loadds, echo=T}
+trainingDf <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"))
+testingDf <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"))
+
+rowsNaStats <- apply(trainingDf, 2, function(x) table(is.na(x)))
+rowsNotNa <- sapply(names(rowsNaStats), function(x, rowsNaStats) if (length(stringr::str_which(names(rowsNaStats[[x]]), "TRUE")) == 1) {x} else {NA}, rowsNaStats)
+rowsNotNa <- names(rowsNotNa[is.na(rowsNotNa)])
+trainingPreDf <- trainingDf[, c(which(colnames(trainingDf) %in% rowsNotNa))]
+
+rowsChrStats <- sapply(colnames(trainingDf), function(x, trainingDf) is.character(trainingDf[,x]), trainingDf)
+rowsChrStats <- names(rowsChrStats[which(rowsChrStats == T)])
+rowsChrStats <- rowsChrStats[-c(length(rowsChrStats))]
+
+trainingPreDf <- trainingPreDf[, -c(which(colnames(trainingPreDf) %in% rowsChrStats))]
+
+colNamesVec <- colnames(trainingPreDf)
+
+trainingPreDf <- trainingPreDf[, -c(which(colNamesVec == "X" | colNamesVec == "raw_timestamp_part_1" |
+                                    colNamesVec == "raw_timestamp_part_2"))]
+```
+
+Below is shown the final training data structure and class distribution.
+```{r structuretraining, echo=T}
+str(trainingPreDf)
+table(trainingPreDf$classe)
+```
+
+Below is shown the final testing data structure.
+```{r structuretesting, echo=T}
+testingPreDf <- testingDf[, c(which(colnames(testingDf) %in% colnames(trainingPreDf)))]
+str(testingPreDf)
+```
+
+Building a classification model. First, the most critical variables are selected by using Recursive Feature Elimination approach (see https://topepo.github.io/caret/recursive-feature-elimination.html))
+```{r featureselection, echo=T}
+cluster <- parallel::makeCluster(9, outfile = "debug-modelLearning.txt")
+doParallel::registerDoParallel(cluster)
+
+set.seed(10)
+ctrl <- rfeControl(functions = rfFuncs,
+                   method = "cv",
+                   verbose = T, 
+                   allowParallel = T)
+
+lmProfile <- rfe(trainingPreDf[,-c(ncol(trainingPreDf))], as.factor(trainingPreDf$classe), rfeControl = ctrl)
+
+parallel::stopCluster(cluster)
+foreach::registerDoSEQ() # The only official way to "unregister" a foreach backend is to register the sequential backend:
+```
+
+Below is shown information about the selected features.
+```{r fsinfo, echo=T}
+lmProfile
+predictors(lmProfile)
+```
+
+Below is shown information about the fitted model thanks to the selected features.
+```{r fsmodelinfo, echo=T}
+lmProfile$fit
+```
+
+Below is shown a plot of the accuracy of the model fitted to the selected number of features.
+```{r fsplot, echo=T}
+trellis.par.set(caretTheme())
+plot(lmProfile, type = c("g", "o"))
+```
+
+Creating again classification model, such as Random Forest (RM), and new Gradient Boosting Machine. Both models based on the selected features mentioned above.
+```{r model, echo=T}
+predictors <- predictors(lmProfile)
+dtrainingCut <- trainingDf[, predictors]
+
+cluster <- parallel::makeCluster(9, outfile = "debug-modelLearning.txt")
+doParallel::registerDoParallel(cluster)
+
+trainControl <- trainControl(method = "cv", number = 10, allowParallel = T)
+
+set.seed(62433)
+m1 <- train(dtrainingCut, as.factor(trainingPreDf$classe), method = "rf", trControl = trainControl)
+set.seed(62433)
+m2 <- train(dtrainingCut, as.factor(trainingPreDf$classe), method = "gbm", trControl = trainControl)
+
+parallel::stopCluster(cluster)
+foreach::registerDoSEQ() # The only official way to "unregister" a foreach backend is to register the sequential backend:
+```
+
+Below is making a prediction using by moth created model and show results. 
+```{r prediction, echo=T}
+predict(m1, testingPreDf[, predictors])
+predict(m2, testingPreDf[, predictors])
+```
+
